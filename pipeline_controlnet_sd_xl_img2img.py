@@ -306,7 +306,8 @@ class StableDiffusionXLControlNetImg2ImgPipeline(
                         self.normalize,
             ])
         
-        set_requires_grad(self.clip_model, False)        
+        if self.clip_model is not None:
+            set_requires_grad(self.clip_model, False)
         self.vae.requires_grad_(False)
         self.unet.requires_grad_(False)
         self.text_encoder.requires_grad_(False)

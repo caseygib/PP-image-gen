@@ -1,3 +1,16 @@
+---
+title: Pelican Press Generator
+emoji: 🕊️
+colorFrom: indigo
+colorTo: purple
+sdk: gradio
+sdk_version: 4.44.0
+app_file: app.py
+pinned: false
+---
+
+<!-- The block above is the Hugging Face Space config. Deploy notes are in DEPLOY.md. -->
+
 <div align="center">
 <h1>InstantStyle-Plus: Style Transfer with Content-Preserving in Text-to-Image Generation</h1>
 

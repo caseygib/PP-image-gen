@@ -1,3 +1,10 @@
 assets/.DS_Store
 data/.DS_Store
 ./.DS_Store
+.DS_Store
+
+# Model weights — too large for git; downloaded on the Space at build time.
+checkpoints/*
+!checkpoints/PUT_MODEL_HERE
+CSD_Score/
+results/
