@@ -1,13 +1,11 @@
---extra-index-url https://download.pytorch.org/whl/cu121
-torch==2.1.2
-torchvision==0.16.2
+torch==2.8.0
+torchvision==0.23.0
 diffusers==0.27.2
 transformers==4.39.3
 accelerate==0.29.2
 safetensors==0.4.2
-huggingface_hub==0.22.2
 gradio==4.44.0
-spaces==0.28.3
+spaces
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
 Pillow==10.2.0
