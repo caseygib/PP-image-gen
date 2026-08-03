@@ -4,8 +4,9 @@ diffusers==0.27.2
 transformers==4.39.3
 accelerate==0.29.2
 safetensors==0.4.2
+huggingface_hub==0.25.2
 gradio==4.44.0
-spaces
+spaces==0.28.3
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
 Pillow==10.2.0
