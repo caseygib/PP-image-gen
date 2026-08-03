@@ -33,6 +33,30 @@ import numpy as np
 from PIL import Image
 
 import gradio as gr
+
+# ---------------------------------------------------------------------------
+# Work around a known gradio 4.44 bug: gradio_client's schema parser raises
+# "TypeError: argument of type 'bool' is not iterable" when a JSON schema
+# contains a boolean (e.g. additionalProperties: True/False) while building the
+# API info on page load. That crash breaks page rendering AND the launch
+# self-check. Make the parser tolerate non-dict schemas.
+import gradio_client.utils as _gcu
+
+_orig_get_type = _gcu.get_type
+def _safe_get_type(schema):
+    if not isinstance(schema, dict):
+        return "Any"
+    return _orig_get_type(schema)
+_gcu.get_type = _safe_get_type
+
+_orig_j2p = _gcu._json_schema_to_python_type
+def _safe_j2p(schema, defs=None):
+    if isinstance(schema, bool):
+        return "Any"
+    return _orig_j2p(schema, defs)
+_gcu._json_schema_to_python_type = _safe_j2p
+# ---------------------------------------------------------------------------
+
 import torch
 from diffusers import DDIMScheduler, ControlNetModel
 from transformers import CLIPVisionModelWithProjection
@@ -214,4 +238,4 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0", server_port=7860)
