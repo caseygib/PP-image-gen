@@ -153,7 +153,7 @@ def generate_caption(image: Image.Image) -> str:
 # ---------------------------------------------------------------------------
 # Per-request generation (runs on the ZeroGPU-allocated A100).
 # ---------------------------------------------------------------------------
-@spaces.GPU(duration=120)
+@spaces.GPU(duration=90)
 def stylize(content_image, style_image, steps, seed,
             style_strength, structure_strength,
             progress=gr.Progress()):
@@ -230,8 +230,8 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
         content_in = gr.Image(label="Content image", type="pil", height=360)
         style_in = gr.Image(label="Style image", type="pil", height=360)
     with gr.Accordion("Advanced settings", open=False):
-        steps = gr.Slider(10, 50, value=25, step=1,
-                          label="Quality steps (higher = better, slower)")
+        steps = gr.Slider(10, 50, value=20, step=1,
+                          label="Quality steps (higher = better, slower; higher uses more GPU quota)")
         seed = gr.Number(value=7865, label="Seed", precision=0)
         style_strength = gr.Slider(0.0, 2.0, value=1.2, step=0.1, label="Style strength")
         structure_strength = gr.Slider(0.0, 1.0, value=0.4, step=0.05,
