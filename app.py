@@ -58,7 +58,7 @@ _gcu._json_schema_to_python_type = _safe_j2p
 # ---------------------------------------------------------------------------
 
 import torch
-from diffusers import DDIMScheduler, ControlNetModel
+from diffusers import DDIMScheduler, ControlNetModel, AutoencoderKL
 from transformers import CLIPVisionModelWithProjection
 from transformers import BlipProcessor, BlipForConditionalGeneration
 
@@ -105,6 +105,13 @@ caption_model = BlipForConditionalGeneration.from_pretrained(
 ).to(DEVICE)
 caption_model.eval()
 
+print("Loading fp16-safe SDXL VAE ...")
+# Stock SDXL's VAE overflows in fp16 and decodes to a black image; this
+# drop-in replacement is numerically stable in fp16.
+vae = AutoencoderKL.from_pretrained(
+    "madebyollin/sdxl-vae-fp16-fix", torch_dtype=DTYPE
+).to(DEVICE)
+
 print("Loading ControlNet (tile) ...")
 controlnet = ControlNetModel.from_pretrained(
     CONTROLNET, torch_dtype=DTYPE, use_safetensors=True
@@ -119,6 +126,7 @@ print("Loading main ControlNet img2img pipeline ...")
 pipe_inference = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
     BASE_MODEL,
     controlnet=controlnet,
+    vae=vae,                   # fp16-safe VAE (avoids black-image decode)
     clip_model=None,           # CSD scoring disabled
     image_encoder=image_encoder,
     torch_dtype=DTYPE,
