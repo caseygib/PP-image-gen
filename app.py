@@ -180,11 +180,18 @@ def stylize(content_image, style_image, steps, seed,
     pipe_inversion, pipe_inv_infer = get_pipes(
         Model_Type.SDXL, Scheduler_Type.DDIM, device=DEVICE, model_name=BASE_MODEL
     )
+    # Use the fp16-safe VAE for inversion encoding too — stock SDXL's VAE
+    # overflows in fp16 and yields NaN latents (which decode to black).
+    pipe_inversion.vae = vae
+    pipe_inv_infer.vae = vae
     _, inv_latent, _, _ = invert(
         content_image, prompt, config,
         pipe_inversion=pipe_inversion, pipe_inference=pipe_inv_infer,
         do_reconstruction=False,
     )
+    print(f"[diag] inv_latent nan={torch.isnan(inv_latent).any().item()} "
+          f"min={inv_latent.float().min().item():.3f} "
+          f"max={inv_latent.float().max().item():.3f}", flush=True)
     del pipe_inversion, pipe_inv_infer
     if DEVICE == "cuda":
         torch.cuda.empty_cache()
@@ -210,6 +217,10 @@ def stylize(content_image, style_image, steps, seed,
         style_guidance_scale=0,
         content_guidance_scale=0,
     ).images
+
+    _arr = np.array(images[0])
+    print(f"[diag] output shape={_arr.shape} min={_arr.min()} "
+          f"max={_arr.max()} mean={_arr.mean():.2f}", flush=True)
 
     if DEVICE == "cuda":
         torch.cuda.empty_cache()
