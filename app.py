@@ -12,15 +12,16 @@
 #   * CSD style-scoring dropped (it was only used when guidance scales > 0,
 #     which we keep at 0) — removes a manual weight download.
 
-# `spaces` must be imported before torch so ZeroGPU can hook CUDA. On non-ZeroGPU
-# hardware (local run or a dedicated GPU) the package may be absent; fall back to
-# a no-op decorator so the same file still runs.
-try:
-    import spaces
-    _HAS_SPACES = True
-except Exception:
-    _HAS_SPACES = False
+# On ZeroGPU, `spaces` must be imported before torch so it can hook CUDA, and
+# @spaces.GPU schedules GPU time per call. On a dedicated GPU (or local), there
+# is no ZeroGPU scheduler, so we use a no-op decorator and a real CUDA device.
+# The ZeroGPU environment sets SPACES_ZERO_GPU.
+import os
 
+_ZERO_GPU = bool(os.environ.get("SPACES_ZERO_GPU"))
+if _ZERO_GPU:
+    import spaces
+else:
     class _NoSpaces:
         def GPU(self, *args, **kwargs):
             def deco(fn):
@@ -79,7 +80,7 @@ CAPTIONER  = "Salesforce/blip-image-captioning-large"    # ~0.9GB, auto-download
 
 # On ZeroGPU CUDA isn't physically attached at import, but `.to("cuda")` is
 # intercepted by the `spaces` shim, so we still target cuda.
-DEVICE = "cuda" if (_HAS_SPACES or torch.cuda.is_available()) else "cpu"
+DEVICE = "cuda" if (_ZERO_GPU or torch.cuda.is_available()) else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 
 
