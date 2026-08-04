@@ -81,7 +81,9 @@ CAPTIONER  = "Salesforce/blip-image-captioning-large"    # ~0.9GB, auto-download
 # On ZeroGPU CUDA isn't physically attached at import, but `.to("cuda")` is
 # intercepted by the `spaces` shim, so we still target cuda.
 DEVICE = "cuda" if (_ZERO_GPU or torch.cuda.is_available()) else "cpu"
-DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
+# bfloat16 (not float16): same memory as fp16 but fp32's numeric range, which
+# avoids the NaN overflow that fp16 hits during ReNoise inversion.
+DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
 
 def resize_img(input_image, max_side=1280, min_side=1024,

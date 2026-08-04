@@ -10,7 +10,7 @@ def create_noise_list(model_type, length, generator=None):
     img_size = model_type_to_size(model_type)
     VQAE_SCALE = 8
     latents_size = (1, 4, img_size[0] // VQAE_SCALE, img_size[1] // VQAE_SCALE)
-    return [randn_tensor(latents_size, dtype=torch.float16, device=torch.device("cuda:0"), generator=generator) for i in range(length)]
+    return [randn_tensor(latents_size, dtype=torch.bfloat16, device=torch.device("cuda:0"), generator=generator) for i in range(length)]
 
 @pyrallis.wrap()
 def main(cfg: RunConfig):

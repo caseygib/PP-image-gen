@@ -129,7 +129,7 @@ def _get_pipes(model_type, device, model_name=None):
     if is_float16(model_type):
         pipe_inference = pipeline_inf.from_pretrained(
                 model_name,
-                torch_dtype=torch.float16,
+                torch_dtype=torch.bfloat16,
                 use_safetensors=True,
                 variant="fp16",
                 safety_checker = None
