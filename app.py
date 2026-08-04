@@ -59,7 +59,7 @@ _gcu._json_schema_to_python_type = _safe_j2p
 # ---------------------------------------------------------------------------
 
 import torch
-from diffusers import DDIMScheduler, ControlNetModel, AutoencoderKL
+from diffusers import DDIMScheduler, ControlNetModel, AutoencoderKL, StableDiffusionXLPipeline
 from transformers import CLIPVisionModelWithProjection
 from transformers import BlipProcessor, BlipForConditionalGeneration
 
@@ -142,6 +142,26 @@ pipe_inference.load_ip_adapter(
     [IP_ADAPTER, IP_ADAPTER],
     subfolder=["sdxl_models", "sdxl_models"],
     weight_name=["ip-adapter_sdxl_vit-h.safetensors", "ip-adapter_sdxl_vit-h.safetensors"],
+    image_encoder_folder=None,
+)
+
+# --- Text-to-image (InstantStyle) pipeline: text prompt + style image -------
+# Lighter path — no inversion/ControlNet. Style is injected only into the
+# style-relevant IP-Adapter block, so content comes from the text prompt.
+print("Loading text-to-image (InstantStyle) pipeline ...")
+pipe_t2i = StableDiffusionXLPipeline.from_pretrained(
+    BASE_MODEL,
+    vae=vae,
+    image_encoder=image_encoder,
+    torch_dtype=DTYPE,
+    use_safetensors=True,
+    variant="fp16",
+    add_watermarker=False,
+).to(DEVICE)
+pipe_t2i.load_ip_adapter(
+    IP_ADAPTER,
+    subfolder="sdxl_models",
+    weight_name="ip-adapter_sdxl_vit-h.safetensors",
     image_encoder_folder=None,
 )
 print("Startup complete.")
@@ -232,31 +252,96 @@ def stylize(content_image, style_image, steps, seed,
 
 
 # ---------------------------------------------------------------------------
+# Per-request generation: text prompt + style image (InstantStyle text2img)
+# ---------------------------------------------------------------------------
+@spaces.GPU(duration=90)
+def stylize_from_text(style_image, prompt, steps, seed, style_strength,
+                      progress=gr.Progress()):
+    if style_image is None:
+        raise gr.Error("Please provide a style image.")
+    if not prompt or not prompt.strip():
+        raise gr.Error("Please describe what you want to generate.")
+
+    style_image = style_image.convert("RGB")
+    generator = torch.Generator(device=DEVICE).manual_seed(int(seed))
+
+    # Inject style only into the style-relevant IP-Adapter block so the content
+    # is driven by the text prompt, not the style image.
+    pipe_t2i.set_ip_adapter_scale({"up": {"block_0": [0.0, float(style_strength), 0.0]}})
+
+    progress(0.2, desc="Generating")
+    image = pipe_t2i(
+        prompt=prompt,
+        negative_prompt="lowres, low quality, worst quality, deformed, noisy, blurry",
+        ip_adapter_image=style_image,
+        guidance_scale=7.0,
+        num_inference_steps=int(steps),
+        generator=generator,
+    ).images[0]
+
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+    progress(1.0, desc="Done")
+    return image
+
+
+# ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 with gr.Blocks(title="Pelican Press Generator") as demo:
-    gr.Markdown(
-        "# 🕊️ Pelican Press Generator\n"
-        "Upload a **content** image and a **style** image. The generator applies "
-        "the style while preserving the content's structure."
-    )
-    with gr.Row():
-        content_in = gr.Image(label="Content image", type="pil", height=360)
-        style_in = gr.Image(label="Style image", type="pil", height=360)
-    with gr.Accordion("Advanced settings", open=False):
-        steps = gr.Slider(10, 50, value=20, step=1,
-                          label="Quality steps (higher = better, slower; higher uses more GPU quota)")
-        seed = gr.Number(value=7865, label="Seed", precision=0)
-        style_strength = gr.Slider(0.0, 2.0, value=1.2, step=0.1, label="Style strength")
-        structure_strength = gr.Slider(0.0, 1.0, value=0.4, step=0.05,
-                                       label="Structure preservation")
-    run_btn = gr.Button("Generate", variant="primary")
-    output = gr.Image(label="Result", height=480)
+    gr.Markdown("# 🕊️ Pelican Press Generator")
 
-    run_btn.click(
-        stylize,
-        inputs=[content_in, style_in, steps, seed, style_strength, structure_strength],
-        outputs=output,
+    with gr.Tabs():
+        # ---- Tab 1: text description + style image ----
+        with gr.Tab("From a description"):
+            gr.Markdown(
+                "Upload a **style** image and **describe** what you want. "
+                "The generator creates a new image of your description in that style."
+            )
+            with gr.Row():
+                t2i_style = gr.Image(label="Style image", type="pil", height=360)
+                t2i_prompt = gr.Textbox(
+                    label="Describe what you want",
+                    placeholder="e.g. a golden retriever sitting down",
+                    lines=4,
+                )
+            with gr.Accordion("Advanced settings", open=False):
+                t2i_steps = gr.Slider(10, 50, value=30, step=1,
+                                      label="Quality steps (higher = better, slower)")
+                t2i_seed = gr.Number(value=7865, label="Seed", precision=0)
+                t2i_style_strength = gr.Slider(0.0, 2.0, value=1.0, step=0.1,
+                                               label="Style strength")
+            t2i_btn = gr.Button("Generate", variant="primary")
+            t2i_output = gr.Image(label="Result", height=480)
+            t2i_btn.click(
+                stylize_from_text,
+                inputs=[t2i_style, t2i_prompt, t2i_steps, t2i_seed, t2i_style_strength],
+                outputs=t2i_output,
+            )
+
+        # ---- Tab 2: content image + style image (original) ----
+        with gr.Tab("From an image"):
+            gr.Markdown(
+                "Upload a **content** image and a **style** image. The generator "
+                "applies the style while preserving the content's structure."
+            )
+            with gr.Row():
+                content_in = gr.Image(label="Content image", type="pil", height=360)
+                style_in = gr.Image(label="Style image", type="pil", height=360)
+            with gr.Accordion("Advanced settings", open=False):
+                steps = gr.Slider(10, 50, value=20, step=1,
+                                  label="Quality steps (higher = better, slower)")
+                seed = gr.Number(value=7865, label="Seed", precision=0)
+                style_strength = gr.Slider(0.0, 2.0, value=1.2, step=0.1, label="Style strength")
+                structure_strength = gr.Slider(0.0, 1.0, value=0.4, step=0.05,
+                                               label="Structure preservation")
+            run_btn = gr.Button("Generate", variant="primary")
+            output = gr.Image(label="Result", height=480)
+
+            run_btn.click(
+                stylize,
+                inputs=[content_in, style_in, steps, seed, style_strength, structure_strength],
+                outputs=output,
     )
 
 if __name__ == "__main__":
