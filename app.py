@@ -312,7 +312,7 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
                 t2i_style_strength = gr.Slider(0.0, 2.0, value=1.0, step=0.1,
                                                label="Style strength")
             t2i_btn = gr.Button("Generate", variant="primary")
-            t2i_output = gr.Image(label="Result", height=480)
+            t2i_output = gr.Image(label="Result", height=480, format="png")
             t2i_btn.click(
                 stylize_from_text,
                 inputs=[t2i_style, t2i_prompt, t2i_steps, t2i_seed, t2i_style_strength],
@@ -336,7 +336,7 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
                 structure_strength = gr.Slider(0.0, 1.0, value=0.4, step=0.05,
                                                label="Structure preservation")
             run_btn = gr.Button("Generate", variant="primary")
-            output = gr.Image(label="Result", height=480)
+            output = gr.Image(label="Result", height=480, format="png")
 
             run_btn.click(
                 stylize,
