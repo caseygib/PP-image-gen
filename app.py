@@ -17,6 +17,22 @@
 # is no ZeroGPU scheduler, so we use a no-op decorator and a real CUDA device.
 # The ZeroGPU environment sets SPACES_ZERO_GPU.
 import os
+import sys
+
+# Keep the HF model cache on FAST LOCAL DISK. When a persistent bucket is mounted
+# at /data, HF may default the cache there — downloading ~20GB of weights onto
+# object storage stalls startup for many minutes. The bucket at /data is only for
+# saved batch outputs, not model weights.
+os.environ["HF_HOME"] = "/tmp/hf_home"
+os.environ["HF_HUB_CACHE"] = "/tmp/hf_home/hub"
+os.makedirs("/tmp/hf_home/hub", exist_ok=True)
+
+# Unbuffered stdout/stderr so startup progress is visible in the Space logs.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 _ZERO_GPU = bool(os.environ.get("SPACES_ZERO_GPU"))
 if _ZERO_GPU:
@@ -151,26 +167,37 @@ pipe_inference.load_ip_adapter(
     image_encoder_folder=None,
 )
 
-# --- Text-to-image (InstantStyle) pipeline: text prompt + style image -------
-# Lighter path — no inversion/ControlNet. Style is injected only into the
-# style-relevant IP-Adapter block, so content comes from the text prompt.
-print("Loading text-to-image (InstantStyle) pipeline ...")
-pipe_t2i = StableDiffusionXLPipeline.from_pretrained(
-    BASE_MODEL,
-    vae=vae,
-    image_encoder=image_encoder,
-    torch_dtype=DTYPE,
-    use_safetensors=True,
-    variant="fp16",
-    add_watermarker=False,
-).to(DEVICE)
-pipe_t2i.load_ip_adapter(
-    IP_ADAPTER,
-    subfolder="sdxl_models",
-    weight_name="ip-adapter_sdxl_vit-h.safetensors",
-    image_encoder_folder=None,
-)
-print("Startup complete.")
+print("Startup complete (text-to-image pipeline loads lazily on first use).", flush=True)
+
+
+# --- Text-to-image (InstantStyle) pipeline: loaded lazily on first use -------
+# Lighter path — no inversion/ControlNet. Loading it on demand (instead of at
+# startup) keeps cold-start fast; the first description/batch generation pays a
+# one-time load cost, then it's cached.
+_pipe_t2i = None
+
+
+def get_t2i():
+    global _pipe_t2i
+    if _pipe_t2i is None:
+        print("Loading text-to-image (InstantStyle) pipeline ...", flush=True)
+        p = StableDiffusionXLPipeline.from_pretrained(
+            BASE_MODEL,
+            vae=vae,
+            image_encoder=image_encoder,
+            torch_dtype=DTYPE,
+            use_safetensors=True,
+            variant="fp16",
+            add_watermarker=False,
+        ).to(DEVICE)
+        p.load_ip_adapter(
+            IP_ADAPTER,
+            subfolder="sdxl_models",
+            weight_name="ip-adapter_sdxl_vit-h.safetensors",
+            image_encoder_folder=None,
+        )
+        _pipe_t2i = p
+    return _pipe_t2i
 
 
 def generate_caption(image: Image.Image) -> str:
@@ -281,6 +308,7 @@ def stylize_from_text(style_image, prompt, steps, seed, style_strength,
 # Shared text-to-image core (used by the description tab and the batch tab)
 # ---------------------------------------------------------------------------
 def _t2i(style_image, prompt, seed, steps, style_strength):
+    pipe_t2i = get_t2i()
     generator = torch.Generator(device=DEVICE).manual_seed(int(seed))
     # Inject style only into the style-relevant IP-Adapter block so content
     # comes from the text prompt, not the style image.
