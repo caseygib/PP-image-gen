@@ -17,22 +17,6 @@
 # is no ZeroGPU scheduler, so we use a no-op decorator and a real CUDA device.
 # The ZeroGPU environment sets SPACES_ZERO_GPU.
 import os
-import sys
-
-# Keep the HF model cache on FAST LOCAL DISK. When a persistent bucket is mounted
-# at /data, HF may default the cache there — downloading ~20GB of weights onto
-# object storage stalls startup for many minutes. The bucket at /data is only for
-# saved batch outputs, not model weights.
-os.environ["HF_HOME"] = "/tmp/hf_home"
-os.environ["HF_HUB_CACHE"] = "/tmp/hf_home/hub"
-os.makedirs("/tmp/hf_home/hub", exist_ok=True)
-
-# Unbuffered stdout/stderr so startup progress is visible in the Space logs.
-try:
-    sys.stdout.reconfigure(line_buffering=True)
-    sys.stderr.reconfigure(line_buffering=True)
-except Exception:
-    pass
 
 _ZERO_GPU = bool(os.environ.get("SPACES_ZERO_GPU"))
 if _ZERO_GPU:
@@ -330,7 +314,8 @@ def _t2i(style_image, prompt, seed, steps, style_strength):
 # ---------------------------------------------------------------------------
 DATA_ROOT = "/data" if os.path.isdir("/data") else os.path.join(os.getcwd(), "batch_data")
 BATCH_ROOT = os.path.join(DATA_ROOT, "batches")
-os.makedirs(BATCH_ROOT, exist_ok=True)
+# NB: do not touch /data at import time — the batch dir is created lazily when a
+# batch actually runs, so startup never blocks on the mounted bucket.
 
 
 def _slug(s):
