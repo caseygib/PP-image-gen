@@ -30,6 +30,12 @@ else:
 
     spaces = _NoSpaces()
 
+import json
+import glob
+import random
+import re
+from datetime import datetime
+
 import numpy as np
 from PIL import Image
 
@@ -263,14 +269,23 @@ def stylize_from_text(style_image, prompt, steps, seed, style_strength,
         raise gr.Error("Please describe what you want to generate.")
 
     style_image = style_image.convert("RGB")
-    generator = torch.Generator(device=DEVICE).manual_seed(int(seed))
-
-    # Inject style only into the style-relevant IP-Adapter block so the content
-    # is driven by the text prompt, not the style image.
-    pipe_t2i.set_ip_adapter_scale({"up": {"block_0": [0.0, float(style_strength), 0.0]}})
-
     progress(0.2, desc="Generating")
-    image = pipe_t2i(
+    image = _t2i(style_image, prompt, seed, steps, style_strength)
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+    progress(1.0, desc="Done")
+    return image
+
+
+# ---------------------------------------------------------------------------
+# Shared text-to-image core (used by the description tab and the batch tab)
+# ---------------------------------------------------------------------------
+def _t2i(style_image, prompt, seed, steps, style_strength):
+    generator = torch.Generator(device=DEVICE).manual_seed(int(seed))
+    # Inject style only into the style-relevant IP-Adapter block so content
+    # comes from the text prompt, not the style image.
+    pipe_t2i.set_ip_adapter_scale({"up": {"block_0": [0.0, float(style_strength), 0.0]}})
+    return pipe_t2i(
         prompt=prompt,
         negative_prompt="lowres, low quality, worst quality, deformed, noisy, blurry",
         ip_adapter_image=style_image,
@@ -279,10 +294,165 @@ def stylize_from_text(style_image, prompt, steps, seed, style_strength,
         generator=generator,
     ).images[0]
 
+
+# ---------------------------------------------------------------------------
+# Batch generation: N breeds x M poses, cohesive per breed, persisted to disk.
+# Results are written under DATA_ROOT so they survive restarts when the Space
+# has persistent storage mounted at /data.
+# ---------------------------------------------------------------------------
+DATA_ROOT = "/data" if os.path.isdir("/data") else os.path.join(os.getcwd(), "batch_data")
+BATCH_ROOT = os.path.join(DATA_ROOT, "batches")
+os.makedirs(BATCH_ROOT, exist_ok=True)
+
+
+def _slug(s):
+    return re.sub(r"[^a-z0-9]+", "-", s.strip().lower()).strip("-")[:60] or "x"
+
+
+def _manifest_path(batch_id):
+    return os.path.join(BATCH_ROOT, batch_id, "manifest.json")
+
+
+def _load_manifest(batch_id):
+    with open(_manifest_path(batch_id)) as f:
+        return json.load(f)
+
+
+def _save_manifest(m):
+    with open(_manifest_path(m["batch_id"]), "w") as f:
+        json.dump(m, f, indent=2)
+
+
+def _gallery_from_manifest(m):
+    items = []
+    bdir = os.path.join(BATCH_ROOT, m["batch_id"])
+    for breed in m["breeds"]:
+        for pose in m["poses"]:
+            cell = m["cells"].get(f"{breed}||{pose}")
+            if cell and os.path.exists(os.path.join(bdir, cell["file"])):
+                items.append((os.path.join(bdir, cell["file"]), f"{breed} — {pose}"))
+    return items
+
+
+def _cell_keys(m):
+    keys = []
+    for breed in m["breeds"]:
+        for pose in m["poses"]:
+            if m["cells"].get(f"{breed}||{pose}"):
+                keys.append(f"{breed}||{pose}")
+    return keys
+
+
+def list_batches():
+    if not os.path.isdir(BATCH_ROOT):
+        return []
+    ids = [d for d in os.listdir(BATCH_ROOT) if os.path.isfile(_manifest_path(d))]
+    return sorted(ids, reverse=True)
+
+
+def load_latest_batch():
+    ids = list_batches()
+    if not ids:
+        return [], None, gr.update(choices=[], value=None)
+    m = _load_manifest(ids[0])
+    return _gallery_from_manifest(m), ids[0], gr.update(choices=ids, value=ids[0])
+
+
+def switch_batch(batch_id):
+    if not batch_id:
+        return [], None, ""
+    m = _load_manifest(batch_id)
+    return (_gallery_from_manifest(m), batch_id,
+            f"Loaded batch {batch_id} — {len(m['cells'])} images.")
+
+
+def refresh_picker():
+    return gr.update(choices=list_batches())
+
+
+def run_batch(style_image, template, poses_text, breeds_text, steps, style_strength,
+              progress=gr.Progress()):
+    if style_image is None:
+        raise gr.Error("Please provide a style reference image.")
+    if "{breed}" not in (template or ""):
+        raise gr.Error("The prompt template must contain {breed}.")
+    poses = [p.strip() for p in poses_text.splitlines() if p.strip()]
+    breeds = [b.strip() for b in breeds_text.splitlines() if b.strip()]
+    if not poses or not breeds:
+        raise gr.Error("Enter at least one pose and one breed (one per line).")
+
+    style_image = style_image.convert("RGB")
+    batch_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    bdir = os.path.join(BATCH_ROOT, batch_id)
+    os.makedirs(bdir, exist_ok=True)
+    style_image.save(os.path.join(bdir, "style.png"))
+
+    manifest = {
+        "batch_id": batch_id,
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "prompt_template": template,
+        "poses": poses,
+        "breeds": breeds,
+        "steps": int(steps),
+        "style_strength": float(style_strength),
+        "cells": {},
+    }
+    _save_manifest(manifest)
+
+    total = len(breeds) * len(poses)
+    done = 0
+    for bi, breed in enumerate(breeds):
+        # Same seed for all poses of a breed -> cohesive "same dog" feel.
+        breed_seed = 100000 + bi
+        for pose in poses:
+            prompt = f"{template.format(breed=breed)}, {pose}"
+            img = _t2i(style_image, prompt, breed_seed, steps, style_strength)
+            fname = f"{_slug(breed)}__{_slug(pose)}.png"
+            img.save(os.path.join(bdir, fname))
+            manifest["cells"][f"{breed}||{pose}"] = {
+                "seed": breed_seed, "file": fname, "prompt": prompt,
+            }
+            done += 1
+        _save_manifest(manifest)
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
+        progress(done / total, desc=f"{breed} done ({done}/{total})")
+        yield (_gallery_from_manifest(manifest), batch_id,
+               f"Generated {done}/{total}. Batch: {batch_id}")
+
+    yield (_gallery_from_manifest(manifest), batch_id,
+           f"✅ Done — {done} images. Batch: {batch_id}")
+
+
+def on_gallery_select(batch_id, evt: gr.SelectData):
+    if not batch_id:
+        return None, ""
+    m = _load_manifest(batch_id)
+    keys = _cell_keys(m)
+    if evt.index is None or not (0 <= evt.index < len(keys)):
+        return None, ""
+    key = keys[evt.index]
+    breed, pose = key.split("||", 1)
+    return key, f"Selected: {breed} — {pose}"
+
+
+def regenerate_cell(batch_id, sel_key):
+    if not batch_id or not sel_key:
+        raise gr.Error("Click an image in the gallery to select it first.")
+    m = _load_manifest(batch_id)
+    bdir = os.path.join(BATCH_ROOT, batch_id)
+    breed, pose = sel_key.split("||", 1)
+    style_image = Image.open(os.path.join(bdir, "style.png")).convert("RGB")
+    new_seed = random.randint(0, 2 ** 31 - 1)
+    prompt = f"{m['prompt_template'].format(breed=breed)}, {pose}"
+    img = _t2i(style_image, prompt, new_seed, m["steps"], m["style_strength"])
+    fname = f"{_slug(breed)}__{_slug(pose)}.png"
+    img.save(os.path.join(bdir, fname))
+    m["cells"][sel_key] = {"seed": new_seed, "file": fname, "prompt": prompt}
+    _save_manifest(m)
     if DEVICE == "cuda":
         torch.cuda.empty_cache()
-    progress(1.0, desc="Done")
-    return image
+    return _gallery_from_manifest(m), f"Regenerated: {breed} — {pose} (seed {new_seed})"
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +512,70 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
                 stylize,
                 inputs=[content_in, style_in, steps, seed, style_strength, structure_strength],
                 outputs=output,
-    )
+            )
+
+        # ---- Tab 3: batch (breeds x poses) ----
+        with gr.Tab("Batch (breeds × poses)"):
+            gr.Markdown(
+                "Generate a cohesive set of poses for many subjects at once. "
+                "Each subject uses one style image and a fixed seed, so its poses "
+                "look like the same subject. Results are saved and can be reloaded "
+                "and regenerated later. **Runs on the dedicated GPU; a full 40-item "
+                "batch takes ~20–35 min.**"
+            )
+            with gr.Row():
+                batch_style = gr.Image(label="Style reference image", type="pil", height=300)
+                with gr.Column():
+                    batch_template = gr.Textbox(
+                        label="Prompt template (must include {breed})",
+                        value="a {breed} antique sketch",
+                    )
+                    batch_poses = gr.Textbox(
+                        label="Poses (one per line)",
+                        value="sitting down\nstanding\nportrait",
+                        lines=4,
+                    )
+                    batch_breeds = gr.Textbox(
+                        label="Subjects / breeds (one per line)",
+                        value="labrador retriever\ngolden retriever\ngerman shepherd",
+                        lines=8,
+                    )
+            with gr.Accordion("Advanced settings", open=False):
+                batch_steps = gr.Slider(10, 50, value=30, step=1,
+                                        label="Quality steps (higher = better, slower)")
+                batch_style_strength = gr.Slider(0.0, 2.0, value=1.0, step=0.1,
+                                                 label="Style strength")
+            batch_run = gr.Button("Run batch", variant="primary")
+            batch_status = gr.Markdown("")
+
+            batch_state = gr.State(None)   # current batch_id
+            sel_state = gr.State(None)     # selected cell key
+
+            batch_picker = gr.Dropdown(label="Load a past batch", choices=[],
+                                       interactive=True)
+            batch_gallery = gr.Gallery(label="Results (click an image to select it)",
+                                       columns=3, height=650, object_fit="contain",
+                                       show_label=True)
+            regen_btn = gr.Button("Regenerate selected image")
+
+            batch_run.click(
+                run_batch,
+                inputs=[batch_style, batch_template, batch_poses, batch_breeds,
+                        batch_steps, batch_style_strength],
+                outputs=[batch_gallery, batch_state, batch_status],
+            ).then(refresh_picker, None, batch_picker)
+
+            batch_gallery.select(on_gallery_select, inputs=[batch_state],
+                                 outputs=[sel_state, batch_status])
+            regen_btn.click(regenerate_cell, inputs=[batch_state, sel_state],
+                            outputs=[batch_gallery, batch_status])
+            batch_picker.change(switch_batch, inputs=[batch_picker],
+                                outputs=[batch_gallery, batch_state, batch_status])
+
+    # On page load, restore the most recent batch (survives restarts when
+    # persistent storage is mounted).
+    demo.load(load_latest_batch, None, [batch_gallery, batch_state, batch_picker])
+
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860, allowed_paths=[DATA_ROOT])
