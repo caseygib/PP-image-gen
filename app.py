@@ -30,6 +30,8 @@ else:
 
     spaces = _NoSpaces()
 
+print("[boot] app.py process started; importing libraries ...", flush=True)
+
 import json
 import glob
 import random
@@ -77,6 +79,8 @@ from src.config import RunConfig
 from inversion import run as invert
 from pipeline_controlnet_sd_xl_img2img import StableDiffusionXLControlNetImg2ImgPipeline
 
+print(f"[boot] libraries imported; DEVICE will be resolved next", flush=True)
+
 # ---------------------------------------------------------------------------
 # Model ids / paths
 # ---------------------------------------------------------------------------
@@ -108,31 +112,32 @@ def resize_img(input_image, max_side=1280, min_side=1024,
 # ---------------------------------------------------------------------------
 # Load models once at startup.
 # ---------------------------------------------------------------------------
-print("Loading BLIP captioner ...")
+print(f"[boot] DEVICE={DEVICE} DTYPE={DTYPE}; loading models ...", flush=True)
+print("Loading BLIP captioner ...", flush=True)
 caption_processor = BlipProcessor.from_pretrained(CAPTIONER)
 caption_model = BlipForConditionalGeneration.from_pretrained(
     CAPTIONER, torch_dtype=DTYPE
 ).to(DEVICE)
 caption_model.eval()
 
-print("Loading fp16-safe SDXL VAE ...")
+print("Loading fp16-safe SDXL VAE ...", flush=True)
 # Stock SDXL's VAE overflows in fp16 and decodes to a black image; this
 # drop-in replacement is numerically stable in fp16.
 vae = AutoencoderKL.from_pretrained(
     "madebyollin/sdxl-vae-fp16-fix", torch_dtype=DTYPE
 ).to(DEVICE)
 
-print("Loading ControlNet (tile) ...")
+print("Loading ControlNet (tile) ...", flush=True)
 controlnet = ControlNetModel.from_pretrained(
     CONTROLNET, torch_dtype=DTYPE, use_safetensors=True
 ).to(DEVICE)
 
-print("Loading IP-Adapter image encoder ...")
+print("Loading IP-Adapter image encoder ...", flush=True)
 image_encoder = CLIPVisionModelWithProjection.from_pretrained(
     IP_ADAPTER, subfolder="models/image_encoder", torch_dtype=DTYPE
 ).to(DEVICE)
 
-print("Loading main ControlNet img2img pipeline ...")
+print("Loading main ControlNet img2img pipeline ...", flush=True)
 pipe_inference = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
     BASE_MODEL,
     controlnet=controlnet,
@@ -608,4 +613,5 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
 
 
 if __name__ == "__main__":
+    print("[boot] launching gradio server on 0.0.0.0:7860 ...", flush=True)
     demo.launch(server_name="0.0.0.0", server_port=7860, allowed_paths=[DATA_ROOT])
