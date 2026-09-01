@@ -584,8 +584,10 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
 
             batch_picker = gr.Dropdown(label="Load a past batch", choices=[],
                                        interactive=True)
+            # No fixed height: the grid expands to fit all rows so the page
+            # scrolls normally (needed for large 40-breed / 120-image batches).
             batch_gallery = gr.Gallery(label="Results (click an image to select it)",
-                                       columns=3, height=650, object_fit="contain",
+                                       columns=3, object_fit="contain",
                                        show_label=True)
             with gr.Row():
                 regen_btn = gr.Button("Regenerate selected image")
