@@ -34,6 +34,7 @@ import json
 import glob
 import random
 import re
+import shutil
 from datetime import datetime
 
 import numpy as np
@@ -314,8 +315,9 @@ def _t2i(style_image, prompt, seed, steps, style_strength):
 # ---------------------------------------------------------------------------
 DATA_ROOT = "/data" if os.path.isdir("/data") else os.path.join(os.getcwd(), "batch_data")
 BATCH_ROOT = os.path.join(DATA_ROOT, "batches")
-# NB: do not touch /data at import time — the batch dir is created lazily when a
-# batch actually runs, so startup never blocks on the mounted bucket.
+# Safe to create the LOCAL batch dir at import (no bucket mounted). If a bucket
+# is ever mounted at /data, revisit this so startup doesn't block on the mount.
+os.makedirs(BATCH_ROOT, exist_ok=True)
 
 
 def _slug(s):
@@ -381,6 +383,17 @@ def switch_batch(batch_id):
 
 def refresh_picker():
     return gr.update(choices=list_batches())
+
+
+def zip_batch(batch_id):
+    if not batch_id:
+        raise gr.Error("No batch selected to download.")
+    bdir = os.path.join(BATCH_ROOT, batch_id)
+    if not os.path.isdir(bdir):
+        raise gr.Error("Batch folder not found.")
+    # Write the zip inside DATA_ROOT so Gradio is allowed to serve it.
+    out_base = os.path.join(DATA_ROOT, f"pelican-batch-{batch_id}")
+    return shutil.make_archive(out_base, "zip", bdir)
 
 
 def run_batch(style_image, template, poses_text, breeds_text, steps, style_strength,
@@ -569,7 +582,10 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
             batch_gallery = gr.Gallery(label="Results (click an image to select it)",
                                        columns=3, height=650, object_fit="contain",
                                        show_label=True)
-            regen_btn = gr.Button("Regenerate selected image")
+            with gr.Row():
+                regen_btn = gr.Button("Regenerate selected image")
+                download_btn = gr.Button("Download this batch (ZIP)")
+            batch_zip = gr.File(label="Batch download", interactive=False)
 
             batch_run.click(
                 run_batch,
@@ -582,6 +598,7 @@ with gr.Blocks(title="Pelican Press Generator") as demo:
                                  outputs=[sel_state, batch_status])
             regen_btn.click(regenerate_cell, inputs=[batch_state, sel_state],
                             outputs=[batch_gallery, batch_status])
+            download_btn.click(zip_batch, inputs=[batch_state], outputs=[batch_zip])
             batch_picker.change(switch_batch, inputs=[batch_picker],
                                 outputs=[batch_gallery, batch_state, batch_status])
 
